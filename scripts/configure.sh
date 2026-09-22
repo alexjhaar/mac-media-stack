@@ -83,10 +83,12 @@ api_post_json() {
     local url="$2"
     local api_key="$3"
     local payload="$4"
+    local method="${5:-POST}"
     local body_file http_code
 
     body_file="$(mktemp)"
     http_code=$(curl -sS -o "$body_file" -w "%{http_code}" \
+        -X "$method" \
         -H "Content-Type: application/json" \
         -H "X-Api-Key: $api_key" \
         -d "$payload" "$url" || echo "000")
@@ -384,7 +386,7 @@ echo ""
 FLARE_TAG_ID=$(curl -fsS "http://localhost:9696/api/v1/tag" \
     -H "X-Api-Key: $PROWLARR_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"label": "flaresolverr"}' 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
+    -d '{"label": "flaresolverr"}' 2>/dev/null | grep -m1 '^  "id":' | grep -o '[0-9]*$' || true)
 FLARE_TAG_ID="${FLARE_TAG_ID:-1}"
 log "FlareSolverr tag created (ID: $FLARE_TAG_ID)"
 
@@ -462,7 +464,6 @@ add_cardigann_indexer() {
 add_cardigann_indexer "YTS" "yts" "https://yts.mx" "" || true
 add_cardigann_indexer "1337x" "1337x" "https://1337x.to" "$FLARE_TAG_ID" || true
 add_cardigann_indexer "EZTV" "eztv" "https://eztvx.to" "" || true
-add_cardigann_indexer "TorrentGalaxy" "torrentgalaxy" "https://torrentgalaxy.to" "" || true
 
 # --- Connect Radarr as app ---
 api_post_json "Prowlarr connected to Radarr" \
@@ -543,63 +544,97 @@ else
     sleep 3
 fi
 
-# Get Seerr API key from settings
-SEERR_KEY=$(curl -fsS "http://localhost:5055/api/v1/settings/main" 2>/dev/null | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4 || true)
+# Get Seerr API key. The settings API requires a browser session cookie
+# (connect.sid) that curl never has, even after the user signs in manually,
+# so read it straight from Seerr's own settings file instead.
+SEERR_KEY=$(grep -o '"apiKey": *"[^"]*"' "$MEDIA_DIR/config/seerr/settings.json" 2>/dev/null | head -1 | cut -d'"' -f4 || true)
 
 if [[ -z "$SEERR_KEY" ]]; then
     warn "Could not get Seerr API key. You may need to configure Radarr/Sonarr in Seerr manually."
     warn "Go to Seerr Settings > Services and add Radarr (localhost:7878) and Sonarr (localhost:8989)."
 else
-    # Get default quality profile and root folder IDs from Radarr
-    RADARR_PROFILE_ID=$(curl -fsS "http://localhost:7878/api/v3/qualityprofile" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
+    # Get default quality profile and root folder IDs/names from Radarr.
+    # Radarr/Sonarr pretty-print with 2-space indent, so a top-level "id"
+    # (2 levels deep: array + object) is anchored at exactly 4 spaces --
+    # without that anchor, grep matches nested ids (e.g. quality.id) instead.
+    RADARR_PROFILE_ID=$(curl -fsS "http://localhost:7878/api/v3/qualityprofile" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | grep -m1 '^    "id":' | grep -o '[0-9]*$' || true)
     RADARR_PROFILE_ID="${RADARR_PROFILE_ID:-1}"
+    RADARR_PROFILE_NAME=$(curl -fsS "http://localhost:7878/api/v3/qualityprofile" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | grep -m1 '^    "name":' | sed 's/.*"name": *"\(.*\)",/\1/' || true)
+    RADARR_PROFILE_NAME="${RADARR_PROFILE_NAME:-Any}"
 
-    RADARR_ROOT_ID=$(curl -fsS "http://localhost:7878/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
+    RADARR_ROOT_ID=$(curl -fsS "http://localhost:7878/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | grep -m1 '^    "id":' | grep -o '[0-9]*$' || true)
     RADARR_ROOT_ID="${RADARR_ROOT_ID:-1}"
 
-    # Get default quality profile and root folder IDs from Sonarr
-    SONARR_PROFILE_ID=$(curl -fsS "http://localhost:8989/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
+    # Get default quality profile and root folder IDs/names from Sonarr
+    SONARR_PROFILE_ID=$(curl -fsS "http://localhost:8989/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | grep -m1 '^    "id":' | grep -o '[0-9]*$' || true)
     SONARR_PROFILE_ID="${SONARR_PROFILE_ID:-1}"
+    SONARR_PROFILE_NAME=$(curl -fsS "http://localhost:8989/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | grep -m1 '^    "name":' | sed 's/.*"name": *"\(.*\)",/\1/' || true)
+    SONARR_PROFILE_NAME="${SONARR_PROFILE_NAME:-Any}"
 
-    SONARR_ROOT_ID=$(curl -fsS "http://localhost:8989/api/v3/rootfolder" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
+    SONARR_ROOT_ID=$(curl -fsS "http://localhost:8989/api/v3/rootfolder" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | grep -m1 '^    "id":' | grep -o '[0-9]*$' || true)
     SONARR_ROOT_ID="${SONARR_ROOT_ID:-1}"
 
-    # Add Radarr to Seerr
+    # Seerr's settings endpoints always append rather than dedupe, so look
+    # for an existing entry (by hostname) and PUT to update it in place
+    # instead of POST-ing a new one on every re-run.
+    RADARR_SEERR_ID=$(curl -fsS "http://localhost:5055/api/v1/settings/radarr" -H "X-Api-Key: $SEERR_KEY" 2>/dev/null | grep -o '"hostname": *"radarr"[^}]*"id": *[0-9]*' | grep -o '[0-9]*$' | head -1 || true)
+    if [[ -n "$RADARR_SEERR_ID" ]]; then
+        RADARR_SEERR_URL="http://localhost:5055/api/v1/settings/radarr/$RADARR_SEERR_ID"
+        RADARR_SEERR_METHOD="PUT"
+    else
+        RADARR_SEERR_URL="http://localhost:5055/api/v1/settings/radarr"
+        RADARR_SEERR_METHOD="POST"
+    fi
+
     api_post_json "Seerr connected to Radarr" \
-        "http://localhost:5055/api/v1/settings/radarr" \
+        "$RADARR_SEERR_URL" \
         "$SEERR_KEY" \
-        "[{
+        "{
             \"name\": \"Radarr\",
             \"hostname\": \"radarr\",
             \"port\": 7878,
             \"apiKey\": \"$RADARR_KEY\",
             \"useSsl\": false,
             \"activeProfileId\": $RADARR_PROFILE_ID,
+            \"activeProfileName\": \"$RADARR_PROFILE_NAME\",
             \"activeDirectory\": \"/movies\",
+            \"minimumAvailability\": \"released\",
             \"is4k\": false,
             \"isDefault\": true,
             \"externalUrl\": \"http://localhost:7878\"
-        }]"
+        }" \
+        "$RADARR_SEERR_METHOD"
 
-    # Add Sonarr to Seerr
+    SONARR_SEERR_ID=$(curl -fsS "http://localhost:5055/api/v1/settings/sonarr" -H "X-Api-Key: $SEERR_KEY" 2>/dev/null | grep -o '"hostname": *"sonarr"[^}]*"id": *[0-9]*' | grep -o '[0-9]*$' | head -1 || true)
+    if [[ -n "$SONARR_SEERR_ID" ]]; then
+        SONARR_SEERR_URL="http://localhost:5055/api/v1/settings/sonarr/$SONARR_SEERR_ID"
+        SONARR_SEERR_METHOD="PUT"
+    else
+        SONARR_SEERR_URL="http://localhost:5055/api/v1/settings/sonarr"
+        SONARR_SEERR_METHOD="POST"
+    fi
+
     api_post_json "Seerr connected to Sonarr" \
-        "http://localhost:5055/api/v1/settings/sonarr" \
+        "$SONARR_SEERR_URL" \
         "$SEERR_KEY" \
-        "[{
+        "{
             \"name\": \"Sonarr\",
             \"hostname\": \"sonarr\",
             \"port\": 8989,
             \"apiKey\": \"$SONARR_KEY\",
             \"useSsl\": false,
             \"activeProfileId\": $SONARR_PROFILE_ID,
+            \"activeProfileName\": \"$SONARR_PROFILE_NAME\",
             \"activeDirectory\": \"/tv\",
             \"activeAnimeProfileId\": $SONARR_PROFILE_ID,
+            \"activeAnimeProfileName\": \"$SONARR_PROFILE_NAME\",
             \"activeAnimeDirectory\": \"/tv\",
             \"is4k\": false,
             \"isDefault\": true,
             \"enableSeasonFolders\": true,
             \"externalUrl\": \"http://localhost:8989\"
-        }]"
+        }" \
+        "$SONARR_SEERR_METHOD"
 fi
 
 echo ""
