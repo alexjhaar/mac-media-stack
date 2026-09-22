@@ -97,7 +97,7 @@ api_post_json() {
         return 0
     fi
 
-    if grep -qiE "already exists|must be unique|duplicate" "$body_file"; then
+    if grep -qiE "already exists|already configured|unique|duplicate" "$body_file"; then
         warn "$label (already configured)"
         rm -f "$body_file"
         return 0
@@ -115,12 +115,25 @@ api_post_form() {
     local cookie="$3"
     shift 3
 
-    if curl -fsS -b "$cookie" "$url" "$@" >/dev/null; then
+    local body_file http_code
+    body_file="$(mktemp)"
+    http_code=$(curl -sS -o "$body_file" -w "%{http_code}" -b "$cookie" "$url" "$@" || echo "000")
+
+    if [[ "$http_code" =~ ^2 ]]; then
         log "$label"
+        rm -f "$body_file"
         return 0
     fi
 
-    fail "$label"
+    if grep -qiE "already exists|already configured|unique|duplicate|unable to create category" "$body_file"; then
+        warn "$label (already configured)"
+        rm -f "$body_file"
+        return 0
+    fi
+
+    fail "$label (HTTP $http_code)"
+    sed -n '1,2p' "$body_file" >&2 || true
+    rm -f "$body_file"
     return 1
 }
 
@@ -133,7 +146,7 @@ wait_for_service() {
     warn "Waiting for $name..."
     while [[ $attempt -lt $max_attempts ]]; do
         status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$url" 2>/dev/null || true)
-        if [[ "$status" =~ ^(200|301|302|401|403)$ ]]; then
+        if [[ "$status" =~ ^(200|301|302|307|401|403)$ ]]; then
             log "$name is ready"
             return 0
         fi
@@ -236,7 +249,22 @@ fi
 # Authenticate with qBittorrent
 QB_COOKIE=$(curl -s -c - "http://localhost:8080/api/v2/auth/login" \
     --data-urlencode "username=admin" \
-    --data-urlencode "password=$QB_TEMP_PASS" 2>/dev/null | grep SID | awk '{print $NF}')
+    --data-urlencode "password=$QB_TEMP_PASS" 2>/dev/null | grep SID | awk '{print $NF}' || true)
+
+# If that failed, the WebUI password may already be permanently set from a
+# previous run (the log-scraped temp password only exists before that happens).
+# Fall back to the last saved password so re-runs stay idempotent.
+if [[ -z "$QB_COOKIE" && -f "$CREDS_FILE" ]]; then
+    SAVED_QB_PASS=$(grep '^qBittorrent Password:' "$CREDS_FILE" | awk '{print $NF}')
+    if [[ -n "$SAVED_QB_PASS" ]]; then
+        QB_COOKIE=$(curl -s -c - "http://localhost:8080/api/v2/auth/login" \
+            --data-urlencode "username=admin" \
+            --data-urlencode "password=$SAVED_QB_PASS" 2>/dev/null | grep SID | awk '{print $NF}' || true)
+        if [[ -n "$QB_COOKIE" ]]; then
+            QB_PASSWORD="$SAVED_QB_PASS"
+        fi
+    fi
+fi
 
 if [[ -z "$QB_COOKIE" ]]; then
     fail "Could not authenticate with qBittorrent"
@@ -260,10 +288,10 @@ else
     # Create download categories
     api_post_form "Download category created: radarr" "http://localhost:8080/api/v2/torrents/createCategory" "SID=$QB_COOKIE" \
         --data-urlencode "category=radarr" \
-        --data-urlencode "savePath=/downloads/complete/radarr"
+        --data-urlencode "savePath=/downloads/complete/radarr" || true
     api_post_form "Download category created: tv-sonarr" "http://localhost:8080/api/v2/torrents/createCategory" "SID=$QB_COOKIE" \
         --data-urlencode "category=tv-sonarr" \
-        --data-urlencode "savePath=/downloads/complete/tv-sonarr"
+        --data-urlencode "savePath=/downloads/complete/tv-sonarr" || true
 fi
 
 save_credentials
@@ -290,6 +318,7 @@ api_post_json "Radarr download client configured" \
     "{
         \"enable\": true,
         \"protocol\": \"torrent\",
+        \"priority\": 1,
         \"name\": \"qBittorrent\",
         \"implementation\": \"QBittorrent\",
         \"configContract\": \"QBittorrentSettings\",
@@ -322,6 +351,7 @@ api_post_json "Sonarr download client configured" \
     "{
         \"enable\": true,
         \"protocol\": \"torrent\",
+        \"priority\": 1,
         \"name\": \"qBittorrent\",
         \"implementation\": \"QBittorrent\",
         \"configContract\": \"QBittorrentSettings\",
@@ -354,7 +384,7 @@ echo ""
 FLARE_TAG_ID=$(curl -fsS "http://localhost:9696/api/v1/tag" \
     -H "X-Api-Key: $PROWLARR_KEY" \
     -H "Content-Type: application/json" \
-    -d '{"label": "flaresolverr"}' | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+    -d '{"label": "flaresolverr"}' 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
 FLARE_TAG_ID="${FLARE_TAG_ID:-1}"
 log "FlareSolverr tag created (ID: $FLARE_TAG_ID)"
 
@@ -391,6 +421,7 @@ add_indexer() {
             \"configContract\": \"${implementation}Settings\",
             \"protocol\": \"torrent\",
             \"enable\": true,
+            \"priority\": 25,
             \"appProfileId\": 1,
             \"fields\": [
                 {\"name\": \"baseUrl\", \"value\": \"$base_url\"},
@@ -418,20 +449,20 @@ add_cardigann_indexer() {
             \"configContract\": \"CardigannSettings\",
             \"protocol\": \"torrent\",
             \"enable\": true,
+            \"priority\": 25,
             \"appProfileId\": 1,
             \"fields\": [
-                {\"name\": \"baseUrl\", \"value\": \"$base_url\"},
-                {\"name\": \"sortRequestLimit\", \"value\": 100},
-                {\"name\": \"multiLanguages\", \"value\": []}
+                {\"name\": \"definitionFile\", \"value\": \"$definition_name\"},
+                {\"name\": \"baseUrl\", \"value\": \"$base_url\"}
             ],
             \"tags\": [$tags]
         }"
 }
 
-add_cardigann_indexer "YTS" "yts" "https://yts.mx" ""
-add_cardigann_indexer "1337x" "1337x" "https://1337x.to" "$FLARE_TAG_ID"
-add_cardigann_indexer "EZTV" "eztv" "https://eztvx.to" ""
-add_cardigann_indexer "TorrentGalaxy" "torrentgalaxy" "https://torrentgalaxy.to" ""
+add_cardigann_indexer "YTS" "yts" "https://yts.mx" "" || true
+add_cardigann_indexer "1337x" "1337x" "https://1337x.to" "$FLARE_TAG_ID" || true
+add_cardigann_indexer "EZTV" "eztv" "https://eztvx.to" "" || true
+add_cardigann_indexer "TorrentGalaxy" "torrentgalaxy" "https://torrentgalaxy.to" "" || true
 
 # --- Connect Radarr as app ---
 api_post_json "Prowlarr connected to Radarr" \
@@ -473,7 +504,7 @@ api_post_json "Prowlarr connected to Sonarr" \
 api_post_json "Indexer sync triggered" \
     "http://localhost:9696/api/v1/command" \
     "$PROWLARR_KEY" \
-    '{"name": "SyncIndexers"}'
+    '{"name": "ApplicationIndexerSync"}'
 
 echo ""
 
@@ -513,24 +544,24 @@ else
 fi
 
 # Get Seerr API key from settings
-SEERR_KEY=$(curl -fsS "http://localhost:5055/api/v1/settings/main" 2>/dev/null | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4)
+SEERR_KEY=$(curl -fsS "http://localhost:5055/api/v1/settings/main" 2>/dev/null | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4 || true)
 
 if [[ -z "$SEERR_KEY" ]]; then
     warn "Could not get Seerr API key. You may need to configure Radarr/Sonarr in Seerr manually."
     warn "Go to Seerr Settings > Services and add Radarr (localhost:7878) and Sonarr (localhost:8989)."
 else
     # Get default quality profile and root folder IDs from Radarr
-    RADARR_PROFILE_ID=$(curl -fsS "http://localhost:7878/api/v3/qualityprofile" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+    RADARR_PROFILE_ID=$(curl -fsS "http://localhost:7878/api/v3/qualityprofile" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
     RADARR_PROFILE_ID="${RADARR_PROFILE_ID:-1}"
 
-    RADARR_ROOT_ID=$(curl -fsS "http://localhost:7878/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+    RADARR_ROOT_ID=$(curl -fsS "http://localhost:7878/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
     RADARR_ROOT_ID="${RADARR_ROOT_ID:-1}"
 
     # Get default quality profile and root folder IDs from Sonarr
-    SONARR_PROFILE_ID=$(curl -fsS "http://localhost:8989/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+    SONARR_PROFILE_ID=$(curl -fsS "http://localhost:8989/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
     SONARR_PROFILE_ID="${SONARR_PROFILE_ID:-1}"
 
-    SONARR_ROOT_ID=$(curl -fsS "http://localhost:8989/api/v3/rootfolder" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+    SONARR_ROOT_ID=$(curl -fsS "http://localhost:8989/api/v3/rootfolder" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2 || true)
     SONARR_ROOT_ID="${SONARR_ROOT_ID:-1}"
 
     # Add Radarr to Seerr
