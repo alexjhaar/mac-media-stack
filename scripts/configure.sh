@@ -127,7 +127,7 @@ api_post_form() {
         return 0
     fi
 
-    if grep -qiE "already exists|already configured|unique|duplicate|unable to create category" "$body_file"; then
+    if grep -qiE "already exists|already configured|unique|duplicate|unable to create category|unable to edit category" "$body_file"; then
         warn "$label (already configured)"
         rm -f "$body_file"
         return 0
@@ -235,11 +235,11 @@ echo -e "${CYAN}[3/6] Configuring qBittorrent...${NC}"
 echo ""
 
 # Get temporary password from logs
-QB_TEMP_PASS=$(docker logs qbittorrent 2>&1 | grep -o 'temporary password is provided for this session: [^ ]*' | tail -1 | awk '{print $NF}')
+QB_TEMP_PASS=$(docker logs qbittorrent 2>&1 | grep -o 'temporary password is provided for this session: [^ ]*' | tail -1 | awk '{print $NF}' || true)
 
 if [[ -z "$QB_TEMP_PASS" ]]; then
     # Try the older log format
-    QB_TEMP_PASS=$(docker logs qbittorrent 2>&1 | sed -n 's/.*password: \([^[:space:]]*\).*/\1/p' | tail -1)
+    QB_TEMP_PASS=$(docker logs qbittorrent 2>&1 | sed -n 's/.*password: \([^[:space:]]*\).*/\1/p' | tail -1 || true)
 fi
 
 if [[ -z "$QB_TEMP_PASS" ]]; then
@@ -280,9 +280,9 @@ else
             \"max_seeding_time\": 0,
             \"max_ratio_act\": 0,
             \"up_limit\": 1024,
-            \"save_path\": \"/downloads/complete\",
+            \"save_path\": \"/data/Downloads/complete\",
             \"temp_path_enabled\": true,
-            \"temp_path\": \"/downloads/incomplete\",
+            \"temp_path\": \"/data/Downloads/incomplete\",
             \"preallocate_all\": false,
             \"add_trackers_enabled\": false
         }"
@@ -290,10 +290,20 @@ else
     # Create download categories
     api_post_form "Download category created: radarr" "http://localhost:8080/api/v2/torrents/createCategory" "SID=$QB_COOKIE" \
         --data-urlencode "category=radarr" \
-        --data-urlencode "savePath=/downloads/complete/radarr" || true
+        --data-urlencode "savePath=/data/Downloads/complete/radarr" || true
     api_post_form "Download category created: tv-sonarr" "http://localhost:8080/api/v2/torrents/createCategory" "SID=$QB_COOKIE" \
         --data-urlencode "category=tv-sonarr" \
-        --data-urlencode "savePath=/downloads/complete/tv-sonarr" || true
+        --data-urlencode "savePath=/data/Downloads/complete/tv-sonarr" || true
+
+    # createCategory only creates; if the category already existed with a
+    # stale savePath (e.g. from before a data-directory move), force it
+    # back in sync with editCategory.
+    api_post_form "Download category path synced: radarr" "http://localhost:8080/api/v2/torrents/editCategory" "SID=$QB_COOKIE" \
+        --data-urlencode "category=radarr" \
+        --data-urlencode "savePath=/data/Downloads/complete/radarr" || true
+    api_post_form "Download category path synced: tv-sonarr" "http://localhost:8080/api/v2/torrents/editCategory" "SID=$QB_COOKIE" \
+        --data-urlencode "category=tv-sonarr" \
+        --data-urlencode "savePath=/data/Downloads/complete/tv-sonarr" || true
 fi
 
 save_credentials
@@ -308,10 +318,22 @@ echo -e "${CYAN}[4/6] Configuring Radarr & Sonarr...${NC}"
 echo ""
 
 # --- Radarr: Add root folder ---
-api_post_json "Radarr root folder set to /movies" \
+# Clean up a stale root folder left over from before a data-directory move
+# (e.g. the old /movies path from a single-mount layout) so Radarr doesn't
+# keep pointing at a path that no longer exists inside the container.
+OLD_RADARR_ROOT_ID=$(curl -fsS "http://localhost:7878/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null | awk '
+    /"path": *"\/movies"/ { want=1 }
+    want && /"id":/ { gsub(/[^0-9]/, ""); print; exit }
+' || true)
+if [[ -n "$OLD_RADARR_ROOT_ID" ]]; then
+    curl -fsS -X DELETE "http://localhost:7878/api/v3/rootfolder/$OLD_RADARR_ROOT_ID" -H "X-Api-Key: $RADARR_KEY" >/dev/null 2>&1 || true
+    warn "Removed stale Radarr root folder: /movies"
+fi
+
+api_post_json "Radarr root folder set to /data/Movies" \
     "http://localhost:7878/api/v3/rootfolder" \
     "$RADARR_KEY" \
-    '{"path": "/movies", "accessible": true}'
+    '{"path": "/data/Movies", "accessible": true}'
 
 # --- Radarr: Add qBittorrent download client ---
 api_post_json "Radarr download client configured" \
@@ -341,10 +363,19 @@ api_post_json "Radarr download client configured" \
     }"
 
 # --- Sonarr: Add root folder ---
-api_post_json "Sonarr root folder set to /tv" \
+OLD_SONARR_ROOT_ID=$(curl -fsS "http://localhost:8989/api/v3/rootfolder" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null | awk '
+    /"path": *"\/tv"/ { want=1 }
+    want && /"id":/ { gsub(/[^0-9]/, ""); print; exit }
+' || true)
+if [[ -n "$OLD_SONARR_ROOT_ID" ]]; then
+    curl -fsS -X DELETE "http://localhost:8989/api/v3/rootfolder/$OLD_SONARR_ROOT_ID" -H "X-Api-Key: $SONARR_KEY" >/dev/null 2>&1 || true
+    warn "Removed stale Sonarr root folder: /tv"
+fi
+
+api_post_json "Sonarr root folder set to /data/TV Shows" \
     "http://localhost:8989/api/v3/rootfolder" \
     "$SONARR_KEY" \
-    '{"path": "/tv", "accessible": true}'
+    '{"path": "/data/TV Shows", "accessible": true}'
 
 # --- Sonarr: Add qBittorrent download client ---
 api_post_json "Sonarr download client configured" \
@@ -597,7 +628,7 @@ else
             \"useSsl\": false,
             \"activeProfileId\": $RADARR_PROFILE_ID,
             \"activeProfileName\": \"$RADARR_PROFILE_NAME\",
-            \"activeDirectory\": \"/movies\",
+            \"activeDirectory\": \"/data/Movies\",
             \"minimumAvailability\": \"released\",
             \"is4k\": false,
             \"isDefault\": true,
@@ -625,10 +656,10 @@ else
             \"useSsl\": false,
             \"activeProfileId\": $SONARR_PROFILE_ID,
             \"activeProfileName\": \"$SONARR_PROFILE_NAME\",
-            \"activeDirectory\": \"/tv\",
+            \"activeDirectory\": \"/data/TV Shows\",
             \"activeAnimeProfileId\": $SONARR_PROFILE_ID,
             \"activeAnimeProfileName\": \"$SONARR_PROFILE_NAME\",
-            \"activeAnimeDirectory\": \"/tv\",
+            \"activeAnimeDirectory\": \"/data/TV Shows\",
             \"is4k\": false,
             \"isDefault\": true,
             \"enableSeasonFolders\": true,

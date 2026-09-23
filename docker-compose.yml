@@ -36,9 +36,7 @@ services:
       - WEBUI_PORT=8080
     volumes:
       - ${MEDIA_DIR}/config/qbittorrent:/config
-      - ${MEDIA_DIR}/Downloads:/downloads
-      - ${MEDIA_DIR}/Movies:/movies
-      - ${MEDIA_DIR}/TV Shows:/tv
+      - ${DATA_DIR}:/data
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"]
       interval: 30s
@@ -73,8 +71,7 @@ services:
       - TZ=${TIMEZONE:-America/New_York}
     volumes:
       - ${MEDIA_DIR}/config/sonarr:/config
-      - ${MEDIA_DIR}/TV Shows:/tv
-      - ${MEDIA_DIR}/Downloads:/downloads
+      - ${DATA_DIR}:/data
     ports:
       - 127.0.0.1:8989:8989
     healthcheck:
@@ -93,8 +90,7 @@ services:
       - TZ=${TIMEZONE:-America/New_York}
     volumes:
       - ${MEDIA_DIR}/config/radarr:/config
-      - ${MEDIA_DIR}/Movies:/movies
-      - ${MEDIA_DIR}/Downloads:/downloads
+      - ${DATA_DIR}:/data
     ports:
       - 127.0.0.1:7878:7878
     healthcheck:
@@ -113,8 +109,7 @@ services:
       - TZ=${TIMEZONE:-America/New_York}
     volumes:
       - ${MEDIA_DIR}/config/bazarr:/config
-      - ${MEDIA_DIR}/Movies:/movies
-      - ${MEDIA_DIR}/TV Shows:/tv
+      - ${DATA_DIR}:/data
     ports:
       - 127.0.0.1:6767:6767
     healthcheck:
@@ -162,8 +157,7 @@ services:
       - TZ=${TIMEZONE:-America/New_York}
     volumes:
       - ${MEDIA_DIR}/config/jellyfin:/config
-      - ${MEDIA_DIR}/Movies:/data/movies
-      - ${MEDIA_DIR}/TV Shows:/data/tvshows
+      - ${DATA_DIR}:/data
     ports:
       - 127.0.0.1:8096:8096
     healthcheck:
