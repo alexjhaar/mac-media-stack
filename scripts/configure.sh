@@ -499,7 +499,7 @@ add_cardigann_indexer() {
 
 add_cardigann_indexer "YTS" "yts" "https://yts.mx" "" || true
 add_cardigann_indexer "1337x" "1337x" "https://1337x.to" "$FLARE_TAG_ID" || true
-add_cardigann_indexer "EZTV" "eztv" "https://eztvx.to" "" || true
+add_cardigann_indexer "EZTV" "eztv" "https://eztvx.to" "$FLARE_TAG_ID" || true
 
 # --- Connect Radarr as app ---
 api_post_json "Prowlarr connected to Radarr" \
