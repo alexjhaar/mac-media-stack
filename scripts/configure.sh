@@ -272,7 +272,11 @@ if [[ -z "$QB_COOKIE" ]]; then
     fail "Could not authenticate with qBittorrent"
     echo "  You may need to configure it manually at http://localhost:8080"
 else
-    # Set permanent password + all preferences in one call
+    # Set permanent password + all preferences in one call.
+    # bypass_local_auth is required for gluetun's VPN_PORT_FORWARDING_UP_COMMAND
+    # to work -- it posts the forwarded port to qBittorrent's setPreferences
+    # endpoint from 127.0.0.1 without logging in first, which qBittorrent
+    # otherwise rejects with 403.
     api_post_form "Password set and preferences configured" "http://localhost:8080/api/v2/app/setPreferences" "SID=$QB_COOKIE" \
         --data-urlencode "json={
             \"web_ui_password\": \"$QB_PASSWORD\",
@@ -284,7 +288,8 @@ else
             \"temp_path_enabled\": true,
             \"temp_path\": \"/data/Downloads/incomplete\",
             \"preallocate_all\": false,
-            \"add_trackers_enabled\": false
+            \"add_trackers_enabled\": false,
+            \"bypass_local_auth\": true
         }"
 
     # Create download categories
