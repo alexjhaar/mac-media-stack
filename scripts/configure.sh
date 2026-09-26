@@ -248,10 +248,13 @@ if [[ -z "$QB_TEMP_PASS" ]]; then
     QB_TEMP_PASS="adminadmin"
 fi
 
-# Authenticate with qBittorrent
+# Authenticate with qBittorrent. Newer qBittorrent versions name the session
+# cookie "QBT_SID_<port>" instead of plain "SID", so capture the cookie's
+# actual name along with its value (as "NAME=VALUE") rather than hardcoding
+# "SID=" -- sending the wrong cookie name is silently treated as unauthenticated.
 QB_COOKIE=$(curl -s -c - "http://localhost:8080/api/v2/auth/login" \
     --data-urlencode "username=admin" \
-    --data-urlencode "password=$QB_TEMP_PASS" 2>/dev/null | grep SID | awk '{print $NF}' || true)
+    --data-urlencode "password=$QB_TEMP_PASS" 2>/dev/null | grep SID | awk '{print $(NF-1)"="$NF}' || true)
 
 # If that failed, the WebUI password may already be permanently set from a
 # previous run (the log-scraped temp password only exists before that happens).
@@ -261,7 +264,7 @@ if [[ -z "$QB_COOKIE" && -f "$CREDS_FILE" ]]; then
     if [[ -n "$SAVED_QB_PASS" ]]; then
         QB_COOKIE=$(curl -s -c - "http://localhost:8080/api/v2/auth/login" \
             --data-urlencode "username=admin" \
-            --data-urlencode "password=$SAVED_QB_PASS" 2>/dev/null | grep SID | awk '{print $NF}' || true)
+            --data-urlencode "password=$SAVED_QB_PASS" 2>/dev/null | grep SID | awk '{print $(NF-1)"="$NF}' || true)
         if [[ -n "$QB_COOKIE" ]]; then
             QB_PASSWORD="$SAVED_QB_PASS"
         fi
@@ -277,7 +280,7 @@ else
     # to work -- it posts the forwarded port to qBittorrent's setPreferences
     # endpoint from 127.0.0.1 without logging in first, which qBittorrent
     # otherwise rejects with 403.
-    api_post_form "Password set and preferences configured" "http://localhost:8080/api/v2/app/setPreferences" "SID=$QB_COOKIE" \
+    api_post_form "Password set and preferences configured" "http://localhost:8080/api/v2/app/setPreferences" "$QB_COOKIE" \
         --data-urlencode "json={
             \"web_ui_password\": \"$QB_PASSWORD\",
             \"max_ratio\": 0,
@@ -293,20 +296,20 @@ else
         }"
 
     # Create download categories
-    api_post_form "Download category created: radarr" "http://localhost:8080/api/v2/torrents/createCategory" "SID=$QB_COOKIE" \
+    api_post_form "Download category created: radarr" "http://localhost:8080/api/v2/torrents/createCategory" "$QB_COOKIE" \
         --data-urlencode "category=radarr" \
         --data-urlencode "savePath=/data/Downloads/complete/radarr" || true
-    api_post_form "Download category created: tv-sonarr" "http://localhost:8080/api/v2/torrents/createCategory" "SID=$QB_COOKIE" \
+    api_post_form "Download category created: tv-sonarr" "http://localhost:8080/api/v2/torrents/createCategory" "$QB_COOKIE" \
         --data-urlencode "category=tv-sonarr" \
         --data-urlencode "savePath=/data/Downloads/complete/tv-sonarr" || true
 
     # createCategory only creates; if the category already existed with a
     # stale savePath (e.g. from before a data-directory move), force it
     # back in sync with editCategory.
-    api_post_form "Download category path synced: radarr" "http://localhost:8080/api/v2/torrents/editCategory" "SID=$QB_COOKIE" \
+    api_post_form "Download category path synced: radarr" "http://localhost:8080/api/v2/torrents/editCategory" "$QB_COOKIE" \
         --data-urlencode "category=radarr" \
         --data-urlencode "savePath=/data/Downloads/complete/radarr" || true
-    api_post_form "Download category path synced: tv-sonarr" "http://localhost:8080/api/v2/torrents/editCategory" "SID=$QB_COOKIE" \
+    api_post_form "Download category path synced: tv-sonarr" "http://localhost:8080/api/v2/torrents/editCategory" "$QB_COOKIE" \
         --data-urlencode "category=tv-sonarr" \
         --data-urlencode "savePath=/data/Downloads/complete/tv-sonarr" || true
 fi
