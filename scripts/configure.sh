@@ -418,6 +418,31 @@ echo ""
 echo -e "${CYAN}[5/6] Configuring Prowlarr...${NC}"
 echo ""
 
+# --- Route Prowlarr's outbound indexer traffic through gluetun's VPN ---
+# Prowlarr talks to indexer sites directly from the Mac's real IP (unlike
+# qBittorrent, which shares gluetun's network namespace), so a site that
+# rate-limits or IP-bans that address blocks every indexer search. gluetun
+# exposes an HTTP proxy (HTTPPROXY=on in docker-compose.yml) that routes
+# just this traffic through the VPN tunnel instead, while
+# proxyBypassLocalAddresses keeps container-to-container calls (to Radarr/
+# Sonarr) untouched.
+PROWLARR_HOST_CONFIG=$(curl -fsS "http://localhost:9696/api/v1/config/host" -H "X-Api-Key: $PROWLARR_KEY" 2>/dev/null || true)
+if [[ -n "$PROWLARR_HOST_CONFIG" ]]; then
+    PROWLARR_HOST_CONFIG=$(echo "$PROWLARR_HOST_CONFIG" | sed \
+        -e 's/"proxyEnabled": *false/"proxyEnabled":true/' \
+        -e 's/"proxyType": *"[a-zA-Z0-9]*"/"proxyType":"http"/' \
+        -e 's/"proxyHostname": *"[^"]*"/"proxyHostname":"gluetun"/' \
+        -e 's/"proxyPort": *[0-9]*/"proxyPort":8888/' \
+        -e 's/"proxyBypassLocalAddresses": *false/"proxyBypassLocalAddresses":true/')
+    api_post_json "Prowlarr routed through VPN proxy" \
+        "http://localhost:9696/api/v1/config/host/1" \
+        "$PROWLARR_KEY" \
+        "$PROWLARR_HOST_CONFIG" \
+        "PUT"
+else
+    warn "Could not read Prowlarr host config; skipping VPN proxy setup"
+fi
+
 # --- Create FlareSolverr tag (ID will be 1) ---
 FLARE_TAG_ID=$(curl -fsS "http://localhost:9696/api/v1/tag" \
     -H "X-Api-Key: $PROWLARR_KEY" \
