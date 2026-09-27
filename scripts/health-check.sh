@@ -88,6 +88,25 @@ else
     echo -e "  ${YELLOW}SKIP${NC}  watchtower (optional; enable with --profile autoupdate)"
 fi
 
+hbbs_state=$(docker inspect -f '{{.State.Status}}' hbbs 2>/dev/null || true)
+hbbr_state=$(docker inspect -f '{{.State.Status}}' hbbr 2>/dev/null || true)
+RUSTDESK_ENABLED=0
+if [[ -n "$hbbs_state" || -n "$hbbr_state" ]]; then
+    RUSTDESK_ENABLED=1
+    for name in hbbs hbbr; do
+        state=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null)
+        if [[ "$state" == "running" ]]; then
+            echo -e "  ${GREEN}OK${NC}  $name (rustdesk profile enabled)"
+            ((PASS++))
+        else
+            echo -e "  ${RED}FAIL${NC}  $name (${state:-not found})"
+            ((FAIL++))
+        fi
+    done
+else
+    echo -e "  ${YELLOW}SKIP${NC}  hbbs/hbbr (optional; enable with --profile rustdesk)"
+fi
+
 echo ""
 echo "Web UIs:"
 check_service "qBittorrent" "http://localhost:8080"
@@ -135,6 +154,22 @@ else
     else
         echo -e "  ${YELLOW}SKIP${NC}  Plex not detected (install separately, see SETUP.md)"
     fi
+fi
+
+if [[ "$RUSTDESK_ENABLED" == "1" ]]; then
+    echo ""
+    echo "RustDesk:"
+    for port_label in "21116:ID server (hbbs)" "21117:relay (hbbr)"; do
+        port="${port_label%%:*}"
+        label="${port_label#*:}"
+        if nc -z -G 5 127.0.0.1 "$port" &>/dev/null; then
+            echo -e "  ${GREEN}OK${NC}  RustDesk $label on port $port"
+            ((PASS++))
+        else
+            echo -e "  ${RED}FAIL${NC}  RustDesk $label not listening on port $port"
+            ((FAIL++))
+        fi
+    done
 fi
 
 echo ""

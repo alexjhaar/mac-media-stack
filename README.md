@@ -48,6 +48,7 @@ There are dozens of *arr stack Docker Compose repos on GitHub. Almost all of the
 | **Bazarr** | Auto-fetches subtitles |
 | **FlareSolverr** | Bypasses Cloudflare protection on certain indexers |
 | **Watchtower** | Optional auto-updater (opt-in profile) |
+| **RustDesk Server** | Optional self-hosted remote desktop server (opt-in profile) |
 
 ## Requirements
 
@@ -115,6 +116,7 @@ docker compose up -d         # start everything
 # if MEDIA_SERVER=jellyfin in .env:
 docker compose --profile jellyfin up -d
 docker compose --profile autoupdate up -d watchtower  # optional auto-updates
+docker compose --profile rustdesk up -d hbbs hbbr     # optional RustDesk server
 bash scripts/configure.sh     # auto-configure all services
 ```
 
@@ -124,6 +126,22 @@ See [SETUP.md](SETUP.md) for the complete step-by-step walkthrough.
 Pinned digest matrix: [IMAGE_LOCK.md](IMAGE_LOCK.md)
 
 By default, Seerr is bound to `127.0.0.1` for safer local-only access. Set `SEERR_BIND_IP=0.0.0.0` in `.env` only if you intentionally want LAN exposure.
+
+## Optional: RustDesk Server
+
+The `rustdesk` profile runs a self-hosted [RustDesk](https://rustdesk.com) ID server (`hbbs`) and relay (`hbbr`), so your RustDesk clients connect through this Mac instead of RustDesk's public servers.
+
+```bash
+docker compose --profile rustdesk up -d hbbs hbbr
+cat "$MEDIA_DIR/config/rustdesk/id_ed25519.pub"   # public key for clients
+```
+
+In each RustDesk client, open **Settings -> Network -> ID/Relay server**, set **ID server** to this Mac's IP or hostname, leave **Relay server** blank, and paste the public key into **Key**.
+
+- Unlike Seerr, RustDesk listens on all interfaces by default (`RUSTDESK_BIND_IP=0.0.0.0`) because clients on other devices must reach it.
+- For access outside your home network, forward TCP `21115-21117` and UDP `21116` on your router to this Mac.
+- Docker Desktop/OrbStack on macOS don't support the host networking the upstream guide uses, so ports are published instead. Some connections may fall back to the relay rather than going direct.
+- Back up `$MEDIA_DIR/config/rustdesk/id_ed25519`. If it's lost, a new key is generated and every client has to be updated.
 
 ## Scripts
 
