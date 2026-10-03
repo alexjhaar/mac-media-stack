@@ -2,6 +2,10 @@
 # Media Stack Auto-Healer
 # Runs hourly via launchd. Checks VPN and container health, restarts what's broken.
 
+# launchd starts jobs with a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin), which
+# misses docker for both Docker Desktop and OrbStack.
+export PATH="$HOME/.orbstack/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/lib/media-path.sh
