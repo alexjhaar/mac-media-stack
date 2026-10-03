@@ -292,7 +292,11 @@ else
             \"temp_path\": \"/data/Downloads/incomplete\",
             \"preallocate_all\": false,
             \"add_trackers_enabled\": false,
-            \"bypass_local_auth\": true
+            \"bypass_local_auth\": true,
+            \"max_active_downloads\": 8,
+            \"max_active_torrents\": 15,
+            \"dont_count_slow_torrents\": true,
+            \"slow_torrent_inactive_timer\": 60
         }"
 
     # Create download categories
